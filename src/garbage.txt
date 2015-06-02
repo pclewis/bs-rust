@@ -1,0 +1,102 @@
+/*
+use std::ops::BitAnd;
+
+struct U256
+{
+    v: [u64; 4]
+}
+
+struct U512
+{
+    v: [U256; 2]
+}
+
+impl BitAnd for U256
+{
+    type Output = U256;
+
+    fn bitand(self, _rhs: U256) -> U256
+    {
+        return U256{ v:[ self.v[0] & _rhs.v[0],
+                       self.v[1] & _rhs.v[1],
+                       self.v[2] & _rhs.v[2],
+                       self.v[3] & _rhs.v[3] ] };
+    }
+}
+*/
+
+/*
+struct U256
+{
+    v : [u64; 4]
+}
+
+struct U512
+{
+    v : [U256; 2]
+}
+*/
+
+/*
+
+#[derive(Copy)]
+struct U256(u64,u64,u64,u64);
+
+impl BitAnd for U256
+{
+    type Output = U256;
+
+    fn bitand(self, _rhs: U256) -> U256
+    {
+       return U256( self.0 & _rhs.0,
+                    self.1 & _rhs.1,
+                    self.2 & _rhs.2,
+                    self.3 & _rhs.3 );
+    }
+}
+
+impl num::traits::PrimInt for U256
+{
+    fn count_ones(self) -> u32
+    {
+        return self.0.count_ones() + self.1.count_ones() + self.2.count_ones() + self.3.count_ones();
+    }
+}
+
+struct SBTreeNode
+{
+    value: U256, // The actual set bits at this node
+    mask: U256, // Which bits have pointers in the map
+    children: Vec<SBTreeNode>,
+}
+*/
+
+/*
+fn fetch_an_integer() -> redis::RedisResult<isize> {
+    // connect to redis
+    let client = try!(redis::Client::open("redis://127.0.0.1/"));
+    let con = try!(client.get_connection());
+    // throw away the result, just make sure it does not fail
+    let _ : () = try!(con.set("my_key", 42));
+    // read back the key and return it.  Because the return value
+    // from the function is a result for integer this will automatically
+    // convert into one.
+    return con.get("my_key");
+}
+*/
+
+/* Not allowed on stable release channel
+
+#![feature(fs_walk)]
+
+            for path in walk_dir(&arg).unwrap() {
+                println!("{}", path.unwrap().path().display());
+            }
+
+*/
+
+    //for (track_id, arg) in env::args().skip(1).enumerate() {
+    /*
+    let x:isize = fetch_an_integer().unwrap(); //fetch_an_integer().unwrap_or(0isize);
+    println!( "hello {}", x );
+    */
