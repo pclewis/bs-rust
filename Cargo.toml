@@ -1,0 +1,12 @@
+[package]
+name = "bs-rust"
+version = "0.1.0"
+authors = ["Philip Lewis <pcl@pclewis.com>"]
+
+[dependencies]
+num = "*"
+rustc-serialize = "0.3"
+log = "*"
+
+[dependencies.redis]
+git = "https://github.com/mitsuhiko/redis-rs.git"
