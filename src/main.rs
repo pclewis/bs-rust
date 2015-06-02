@@ -35,7 +35,6 @@ fn get_or_incr( conn: &Connection, key: &str, counter_key: &str ) -> u64
         Ok(v) => v,
         Err(_) => {
             let id = conn.incr(counter_key, 1).unwrap();
-            //conn.set(key, id).ok().expect("aaa");
             let _ : () = conn.set(key, id).unwrap();
             id
         }
@@ -74,13 +73,50 @@ fn walk_dir<F>(path: &Path, cb: &mut F) -> io::Result<()>
     Ok(())
 }
 
+fn list_tags(conn: &Connection, max: usize)
+{
+    println!("Listing {} tags", if max > 0 { format!("top {}", max) } else { "all".into() } );
+
+    let tags : Vec<String> = redis::cmd("KEYS").arg("tag-tracks-*").query(conn).unwrap();
+    let mut tags_counts : Vec<(&str, usize)> = tags.iter().map( |t| { let c:usize = conn.scard(&t as &str).unwrap(); (t as &str, c) } ).collect();
+    tags_counts.sort_by(|a,b| b.1.cmp(&a.1)); // sort descending
+    for (i, &(t,c)) in tags_counts.iter().enumerate() {
+        if max > 0 && i > max {
+            break;
+        } else {
+            println!("{} {}", t, c);
+        }
+    }
+
+}
+
+fn usage(program_name: &str)
+{
+    println!("Usage:");
+    println!("\t{} <command> <args>", program_name);
+    println!("");
+    println!("Commands:");
+    println!("\t{:20} {}", "import PATH...", "import tracks");
+    println!("\t{:20} {}", "tags [N]", "list N biggest tags (if omitted, list all)");
+}
+
 fn main()
 {
     let conn = redis_connection().unwrap();
-
-    for arg in env::args().skip(1) {
-        debug!("Reading {}", arg);
-        walk_dir( Path::new(&arg), &mut |f| load_track(&conn, f.to_str().unwrap()) );
+    let mut args = env::args();
+    let prog_name = args.next().unwrap();
+    match args.next().unwrap_or("".into()).as_ref() {
+        "import" => {
+            for arg in args {
+                debug!("Reading {}", arg);
+                walk_dir( Path::new(&arg), &mut |f| load_track(&conn, f.to_str().unwrap()) ).ok().expect("Error reading path");
+            }
+        },
+        "tags" => {
+            let max = args.next().and_then(|v|v.parse().ok()).unwrap_or(0);
+            list_tags(&conn, max);
+        },
+        _ => usage(&prog_name)
     }
 
 }
