@@ -7,6 +7,7 @@ authors = ["Philip Lewis <pcl@pclewis.com>"]
 num = "*"
 rustc-serialize = "0.3"
 log = "*"
+time = "*"
 
 [dependencies.redis]
 git = "https://github.com/mitsuhiko/redis-rs.git"
