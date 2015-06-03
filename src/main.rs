@@ -1,6 +1,7 @@
 #[macro_use] extern crate log;
 extern crate redis;
 extern crate rustc_serialize;
+extern crate time;
 use redis::{RedisResult, Connection, Commands};
 use rustc_serialize::json;
 use std::env;
@@ -90,6 +91,40 @@ fn list_tags(conn: &Connection, max: usize)
 
 }
 
+macro_rules! time
+{
+    ($desc: expr, $($expr: expr),*) => {
+        {
+            let start = time::precise_time_ns();
+            let result = $( $expr )*;
+            let end = time::precise_time_ns();
+            println!("{:20}: {:13} ns", $desc, (end - start) );
+            result
+        }
+    }
+}
+
+fn bench1(conn: &Connection, n: usize)
+{
+    println!("Sorting tracks by size..");
+    let tracks : Vec<String> = redis::cmd("KEYS").arg("track-tags-*").query(conn).unwrap();
+    let mut tracks_counts : Vec<(&str, usize)> = time!( "fetch", tracks.iter().map( |t| { let c:usize = conn.scard(&t as &str).unwrap(); (t as &str, c) } ).collect() );
+    time!( "sort", tracks_counts.sort_by(|a,b| b.1.cmp(&a.1)) ); // sort descending
+    let top_n : Vec<&str> = tracks_counts.iter().take(n).map(|f| f.0).collect();
+    println!("Start.. {}", top_n.len());
+    let tags : Vec<usize> = time!( "union track-tags", conn.sunion(top_n).unwrap() );
+    println!("Got {} tags", tags.len() );
+    let tag_names : Vec<String> = tags.iter().map( |t| format!("tag-tracks-{}", t) ).collect();
+    let tracks : Vec<usize> = time!( "union tag-tracks", conn.sunion(tag_names).unwrap() );
+    println!("Got {} tracks", tracks.len() );
+    let track_names : Vec<String> = tracks.iter().map( |t| format!("track-tags-{}", t) ).collect();
+    let final_tags : Vec<usize> = time!( "inter track-tags", conn.sinter( track_names ).unwrap() );
+    println!("Final tags:");
+    for tag in final_tags {
+        println!("{}", tag);
+    }
+}
+
 fn usage(program_name: &str)
 {
     println!("Usage:");
@@ -98,6 +133,7 @@ fn usage(program_name: &str)
     println!("Commands:");
     println!("\t{:20} {}", "import PATH...", "import tracks");
     println!("\t{:20} {}", "tags [N]", "list N biggest tags (if omitted, list all)");
+    println!("\t{:20} {}", "bench1 N", "union all tags from top N tracks, get all tracks with those tags, then intersect the tags");
 }
 
 fn main()
@@ -116,6 +152,10 @@ fn main()
             let max = args.next().and_then(|v|v.parse().ok()).unwrap_or(0);
             list_tags(&conn, max);
         },
+        "bench1" => {
+            let n = args.next().and_then(|v|v.parse().ok()).unwrap();
+            bench1(&conn, n);
+        }
         _ => usage(&prog_name)
     }
 
