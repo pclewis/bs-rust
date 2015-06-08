@@ -97,8 +97,8 @@ fn list_tags(conn: &Connection, max: usize)
 
 fn colorize_ns<T:Write>(t: &mut Terminal<T>, ns: u64)
 {
-    let s = format!("{:12}", ns);
-    let colors = [term::color::BRIGHT_YELLOW, term::color::BRIGHT_GREEN, term::color::BRIGHT_BLUE, term::color::BRIGHT_BLUE];
+    let s = format!("{:15}", ns);
+    let colors = [term::color::BRIGHT_RED, term::color::BRIGHT_YELLOW, term::color::BRIGHT_GREEN, term::color::BRIGHT_BLUE, term::color::BRIGHT_BLUE];
     for (chars,color) in s.as_bytes().chunks(3).zip(colors.iter()) {
         t.fg(*color).unwrap();
         write!( t, "{}", str::from_utf8(chars).unwrap() ).unwrap();
@@ -165,7 +165,10 @@ fn main()
         "import" => {
             for arg in args {
                 debug!("Reading {}", arg);
-                walk_dir( Path::new(&arg), &mut |f| load_track(&conn, &bs, f.to_str().unwrap()) ).ok().expect("Error reading path");
+                time!("Import tracks",
+                      walk_dir( Path::new(&arg),
+                                &mut |f| load_track(&conn, &bs, f.to_str().unwrap()))
+                      ).ok().expect("Error reading path");
             }
         },
         "tags" => {
