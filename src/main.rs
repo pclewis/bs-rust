@@ -2,6 +2,7 @@
 extern crate redis;
 extern crate rustc_serialize;
 extern crate time;
+extern crate term;
 use redis::{RedisResult,  Connection, Commands, RedisError};
 use rustc_serialize::json;
 use std::env;
@@ -10,6 +11,8 @@ use std::fs;
 use std::fs::File;
 use std::path::Path;
 use std::io;
+use std::str;
+use term::StdoutTerminal;
 
 trait Bitset<T: std::error::Error>
 {
@@ -67,6 +70,7 @@ struct Track
     track_id: String,
     title: String
 }
+
 
 
 fn redis_connection() -> RedisResult<Connection>
@@ -136,6 +140,17 @@ fn list_tags(conn: &Connection, max: usize)
 
 }
 
+// I have no idea how to make this take a generic Terminal
+fn colorize_ns(t: &mut StdoutTerminal, ns: u64)
+{
+    let s = format!("{:12}", ns);
+    let colors = [term::color::BRIGHT_YELLOW, term::color::BRIGHT_GREEN, term::color::BRIGHT_BLUE, term::color::BRIGHT_BLUE];
+    for (chars,color) in s.as_bytes().chunks(3).zip(colors.iter()) {
+        t.fg(*color).unwrap();
+        write!( t, "{}", str::from_utf8(chars).unwrap() ).unwrap();
+    }
+}
+
 macro_rules! time
 {
     ($desc: expr, $($expr: expr),*) => {
@@ -143,7 +158,11 @@ macro_rules! time
             let start = time::precise_time_ns();
             let result = $( $expr )*;
             let end = time::precise_time_ns();
-            println!("{:20}: {:13} ns", $desc, (end - start) );
+            let mut t = term::stdout().unwrap();
+            write!(t, "{:20}: ", $desc ).unwrap();
+            colorize_ns(&mut *t, end - start);
+            t.reset().unwrap();
+            writeln!(t, " ns").unwrap();
             result
         }
     }

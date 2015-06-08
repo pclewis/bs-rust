@@ -8,6 +8,7 @@ num = "*"
 rustc-serialize = "0.3"
 log = "*"
 time = "*"
+term = "0.2"
 
 [dependencies.redis]
 git = "https://github.com/mitsuhiko/redis-rs.git"
