@@ -1,4 +1,5 @@
 #[macro_use] extern crate log;
+extern crate env_logger;
 extern crate redis;
 extern crate rustc_serialize;
 extern crate time;
@@ -155,6 +156,7 @@ fn usage(program_name: &str)
 
 fn main()
 {
+    env_logger::init().unwrap();
     let conn = redis_connection().unwrap();
     let mut args = env::args();
     let prog_name = args.next().unwrap();
@@ -176,5 +178,4 @@ fn main()
         }
         _ => usage(&prog_name)
     }
-
 }
