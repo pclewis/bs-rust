@@ -12,7 +12,10 @@ use std::fs::File;
 use std::path::Path;
 use std::io;
 use std::str;
+use std::error::Error;
 use term::Terminal;
+mod bitset;
+use self::bitset::{Bitset,RedisBitset};
 
 #[derive(RustcDecodable)]
 #[allow(dead_code)]
@@ -26,15 +29,13 @@ struct Track
     title: String
 }
 
-
-
 fn redis_connection() -> RedisResult<Connection>
 {
     let client = try!(redis::Client::open("redis://127.0.0.1/"));
     return client.get_connection();
 }
 
-fn get_or_incr( conn: &Connection, key: &str, counter_key: &str ) -> u64
+fn get_or_incr( conn: &Connection, key: &str, counter_key: &str ) -> usize
 {
     match conn.get(key) {
         Ok(v) => v,
@@ -46,20 +47,18 @@ fn get_or_incr( conn: &Connection, key: &str, counter_key: &str ) -> u64
     }
 }
 
-fn load_track(conn: &Connection, filename: &str)
+fn load_track<T:Error>(conn: &Connection, bs: &Bitset<T>, filename: &str)
 {
     let mut f = File::open(filename).unwrap();
     let mut s = String::new();
     f.read_to_string(&mut s).ok();
     let track: Track = json::decode(&s).unwrap();
     let int_track_id = get_or_incr(&conn, &track.track_id, "last_track_id");
-    let track_key = format!("track-tags-{}", int_track_id);
     debug!( "Artist: {}, title: {}", track.artist, track.title );
     for tag in track.tags {
         let int_tag_id = get_or_incr(&conn, &tag.0, "last_tag_id");
-        let tag_key = format!("tag-tracks-{}", int_tag_id);
-        let _ : () = conn.sadd( &track_key as &str, int_tag_id ).unwrap();
-        let _ : () = conn.sadd( &tag_key as &str, int_track_id ).unwrap();
+        bs.add( "track-tags", int_track_id, &[int_tag_id] ).unwrap();
+        bs.add( "tag-tracks", int_tag_id, &[int_track_id] ).unwrap();
     }
 }
 
@@ -159,11 +158,12 @@ fn main()
     let conn = redis_connection().unwrap();
     let mut args = env::args();
     let prog_name = args.next().unwrap();
+    let bs = RedisBitset::new(&conn);
     match args.next().unwrap_or("".into()).as_ref() {
         "import" => {
             for arg in args {
                 debug!("Reading {}", arg);
-                walk_dir( Path::new(&arg), &mut |f| load_track(&conn, f.to_str().unwrap()) ).ok().expect("Error reading path");
+                walk_dir( Path::new(&arg), &mut |f| load_track(&conn, &bs, f.to_str().unwrap()) ).ok().expect("Error reading path");
             }
         },
         "tags" => {
