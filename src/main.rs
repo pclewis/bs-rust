@@ -3,7 +3,7 @@ extern crate redis;
 extern crate rustc_serialize;
 extern crate time;
 extern crate term;
-use redis::{RedisResult,  Connection, Commands, RedisError};
+use redis::{RedisResult,  Connection, Commands};
 use rustc_serialize::json;
 use std::env;
 use std::io::prelude::*;
@@ -13,51 +13,6 @@ use std::path::Path;
 use std::io;
 use std::str;
 use term::Terminal;
-
-trait Bitset<T: std::error::Error>
-{
-    fn add(&self, set_name: &str, key: usize, values: &[usize]) -> Result< (), T >;
-    fn union(&self, set_name: &str, keys: &[usize]) -> Result< Vec<usize>, T >;
-    fn intersect(&self, set_name: &str, keys: &[usize]) -> Result< Vec<usize>, T >;
-}
-
-struct RedisBitset<'a>
-{
-    conn: & 'a Connection,
-}
-
-impl<'a> Bitset<RedisError> for RedisBitset<'a>
-{
-    fn add(&self, set_name: &str, key: usize, values: &[usize]) -> RedisResult< () >
-    {
-        let key_str = format!("{}-{}", set_name, key);
-        // need let to make types explicit
-        let res : RedisResult<()> = self.conn.sadd(key_str, values);
-        res
-    }
-
-    fn union(&self, set_name: &str, keys: &[usize]) -> RedisResult< Vec<usize> >
-    {
-        let key_strs : Vec<String> = keys.iter().map( |k| format!("{}-{}", set_name, k) ).collect();
-        let res : RedisResult<Vec<usize>> = self.conn.sunion( key_strs );
-        res
-    }
-
-    fn intersect(&self, set_name: &str, keys: &[usize]) -> RedisResult< Vec<usize> >
-    {
-        let key_strs : Vec<String> = keys.iter().map( |k| format!("{}-{}", set_name, k) ).collect();
-        let res : RedisResult<Vec<usize>> = self.conn.sinter( key_strs );
-        res
-    }
-}
-
-impl<'a> RedisBitset<'a>
-{
-    fn new(conn: &Connection) -> RedisBitset
-    {
-        return RedisBitset{ conn: conn }
-    }
-}
 
 #[derive(RustcDecodable)]
 #[allow(dead_code)]
