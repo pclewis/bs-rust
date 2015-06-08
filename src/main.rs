@@ -12,7 +12,7 @@ use std::fs::File;
 use std::path::Path;
 use std::io;
 use std::str;
-use term::StdoutTerminal;
+use term::Terminal;
 
 trait Bitset<T: std::error::Error>
 {
@@ -140,8 +140,7 @@ fn list_tags(conn: &Connection, max: usize)
 
 }
 
-// I have no idea how to make this take a generic Terminal
-fn colorize_ns(t: &mut StdoutTerminal, ns: u64)
+fn colorize_ns<T:Write>(t: &mut Terminal<T>, ns: u64)
 {
     let s = format!("{:12}", ns);
     let colors = [term::color::BRIGHT_YELLOW, term::color::BRIGHT_GREEN, term::color::BRIGHT_BLUE, term::color::BRIGHT_BLUE];
