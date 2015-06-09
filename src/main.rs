@@ -13,7 +13,6 @@ use std::fs::File;
 use std::path::Path;
 use std::io;
 use std::str;
-use std::error::Error;
 use term::Terminal;
 mod bitset;
 use self::bitset::{Bitset,RedisBitset};
@@ -48,7 +47,7 @@ fn get_or_incr( conn: &Connection, key: &str, counter_key: &str ) -> usize
     }
 }
 
-fn load_track<T:Error>(conn: &Connection, bs: &Bitset<T>, filename: &str)
+fn load_track<T>(conn: &Connection, bs: &mut Bitset<T>, filename: &str)
 {
     let mut f = File::open(filename).unwrap();
     let mut s = String::new();
@@ -58,13 +57,14 @@ fn load_track<T:Error>(conn: &Connection, bs: &Bitset<T>, filename: &str)
     debug!( "Artist: {}, title: {}", track.artist, track.title );
     for tag in track.tags {
         let int_tag_id = get_or_incr(&conn, &tag.0, "last_tag_id");
-        bs.add( "track-tags", int_track_id, &[int_tag_id] ).unwrap();
-        bs.add( "tag-tracks", int_tag_id, &[int_track_id] ).unwrap();
+        bs.add( "track-tags", int_track_id, &[int_tag_id] ).ok().expect("a");
+        bs.add( "tag-tracks", int_tag_id, &[int_track_id] ).ok().expect("b");
     }
 }
 
+// Had to change Fn to FnMut to "borrow data mutably in a captured outer variable". TODO: figure out what any of that means and why.
 fn walk_dir<F>(path: &Path, cb: &mut F) -> io::Result<()>
-    where F : Fn(&Path) -> ()
+    where F : FnMut(&Path) -> ()
 {
     let meta = fs::metadata(path).unwrap();
     if meta.is_dir() {
@@ -160,14 +160,14 @@ fn main()
     let conn = redis_connection().unwrap();
     let mut args = env::args();
     let prog_name = args.next().unwrap();
-    let bs = RedisBitset::new(&conn);
+    let mut bs = RedisBitset::new(&conn);
     match args.next().unwrap_or("".into()).as_ref() {
         "import" => {
             for arg in args {
                 debug!("Reading {}", arg);
                 time!("Import tracks",
                       walk_dir( Path::new(&arg),
-                                &mut |f| load_track(&conn, &bs, f.to_str().unwrap()))
+                                &mut |f| load_track(&conn, &mut bs, f.to_str().unwrap()))
                       ).ok().expect("Error reading path");
             }
         },
