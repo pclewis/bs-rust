@@ -15,7 +15,7 @@ use std::io;
 use std::str;
 use term::Terminal;
 mod bitset;
-use self::bitset::{Bitset,RedisBitset};
+use self::bitset::{Bitset,RedisBitset,JudyBitset};
 
 #[derive(RustcDecodable)]
 #[allow(dead_code)]
@@ -143,6 +143,50 @@ fn bench1(conn: &Connection, n: usize)
     }
 }
 
+fn bench2(conn: &Connection, n: usize)
+{
+    println!("Sorting tracks by size..");
+    let tracks : Vec<String> = redis::cmd("KEYS").arg("track-tags-*").query(conn).unwrap();
+    let mut tracks_counts : Vec<(&str, usize)> = time!( "fetch", tracks.iter().map( |t| { let c:usize = conn.scard(&t as &str).unwrap(); (t as &str, c) } ).collect() );
+    time!( "sort", tracks_counts.sort_by(|a,b| b.1.cmp(&a.1)) ); // sort descending
+    let top_n : Vec<&str> = tracks_counts.iter().take(n).map(|f| f.0).collect();
+    let top_n_keys : Vec<usize> = top_n.iter().map( |t| t.split("-").nth(2).unwrap().parse().unwrap() ).collect();
+    println!("Copying {} sets to judy", top_n.len());
+    let mut judy = JudyBitset::new();
+    // for track in top_n doesn't work because we use top_n later. TODO: understand why
+    for &track in top_n.iter() {
+        let track_num : usize = track.split("-").nth(2).unwrap().parse().unwrap();
+        let members : Vec<usize> = conn.smembers(track).unwrap();
+        judy.add( "track-tags", track_num, &members ).unwrap();
+    }
+
+    let tags : Vec<usize> = time!( "union track-tags", judy.union("track-tags", &top_n_keys).unwrap() );
+    println!("Got {} tags", tags.len() );
+    let tag_names : Vec<String> = tags.iter().map( |t| format!("tag-tracks-{}", t) ).collect();
+
+    println!("Copying {} sets to judy", tags.len() );
+    for (tag, &num) in tag_names.iter().zip(&tags) {
+        let members : Vec<usize> = conn.smembers(tag as &str).unwrap();
+        judy.add("tag-tracks", num, &members).unwrap();
+    }
+
+    let tracks : Vec<usize> = time!( "union tag-tracks", judy.union("tag-tracks", &tags).unwrap() );
+    println!("Got {} tracks", tracks.len() );
+    let track_names : Vec<String> = tracks.iter().map( |t| format!("track-tags-{}", t) ).collect();
+
+    println!("Copying {} sets to judy", tracks.len() );
+    for (track, &num) in track_names.iter().zip(&tracks) {
+        let members : Vec<usize> = conn.smembers(track as &str).unwrap();
+        judy.add("track-tags", num, &members).unwrap();
+    }
+
+    let final_tags : Vec<usize> = time!( "inter track-tags", judy.intersect("track-tags", &tracks).unwrap() );
+    println!("Final tags:");
+    for tag in final_tags {
+        println!("{}", tag);
+    }
+}
+
 fn usage(program_name: &str)
 {
     println!("Usage:");
@@ -152,6 +196,7 @@ fn usage(program_name: &str)
     println!("\t{:20} {}", "import PATH...", "import tracks");
     println!("\t{:20} {}", "tags [N]", "list N biggest tags (if omitted, list all)");
     println!("\t{:20} {}", "bench1 N", "union all tags from top N tracks, get all tracks with those tags, then intersect the tags");
+    println!("\t{:20} {}", "bench2 N", "copy redis to judy, then do bench1 with judy");
 }
 
 fn main()
@@ -178,6 +223,10 @@ fn main()
         "bench1" => {
             let n = args.next().and_then(|v|v.parse().ok()).unwrap();
             bench1(&conn, n);
+        }
+        "bench2" => {
+            let n = args.next().and_then(|v|v.parse().ok()).unwrap();
+            bench2(&conn, n);
         }
         _ => usage(&prog_name)
     }
