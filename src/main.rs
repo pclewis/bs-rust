@@ -49,7 +49,11 @@ struct AllTrackBuilder
     all_tracks: AllTracks
 }
 
-fn get_or_incr2( id_map: &mut HashMap<String, u64>, id: &str, next_int: &mut u64) -> u64
+fn get_or_incr2( id_map: &mut HashMap<String, u64>,
+    set_list: &mut Vec<HashSet<u64>>,
+    id_list: &mut Vec<String>,
+    id: &str,
+    next_int: &mut u64) -> u64
 {
     match id_map.get(id) {
         Some(&v) => return v,
@@ -57,6 +61,9 @@ fn get_or_incr2( id_map: &mut HashMap<String, u64>, id: &str, next_int: &mut u64
             let v = *next_int;
             *next_int += 1;
             id_map.insert(id.to_owned(), v);
+            let set = HashSet::new();
+            set_list.push(set);
+            id_list.push( id.to_owned() );
             return v;
         }
     }
@@ -75,28 +82,22 @@ fn load_track2(atb: &mut AllTrackBuilder, filename: &str)
     }
     let track: Track = decode.unwrap();
 
-    let int_track_id = get_or_incr2(&mut atb.track_ids, &track.track_id, &mut atb.next_track_int);
-
-    if int_track_id as usize >= atb.all_tracks.track_tags.len() {
-        let mut set = HashSet::new();
-        atb.all_tracks.track_tags.push( set );
-        atb.all_tracks.track_ids.push( track.track_id.to_owned() );
-    }
+    let int_track_id = get_or_incr2(&mut atb.track_ids,
+        &mut atb.all_tracks.track_tags,
+        &mut atb.all_tracks.track_ids,
+        &track.track_id,
+        &mut atb.next_track_int);
 
     debug!( "Artist: {}, title: {}", track.artist, track.title );
     for tag in track.tags {
-        let int_tag_id = get_or_incr2(&mut atb.tag_names, &tag.0, &mut atb.next_tag_int);
+        let int_tag_id = get_or_incr2(&mut atb.tag_names,
+            &mut atb.all_tracks.tag_tracks,
+            &mut atb.all_tracks.tag_names,
+            &tag.0,
+            &mut atb.next_tag_int);
 
         atb.all_tracks.track_tags.get_mut(int_track_id as usize).unwrap().insert( int_tag_id );
-
-        if int_tag_id as usize >= atb.all_tracks.tag_tracks.len() {
-            let mut set = HashSet::new();
-            set.insert(int_track_id);
-            atb.all_tracks.tag_tracks.push( set );
-            atb.all_tracks.tag_names.push( tag.0.to_owned() );
-        } else {
-            atb.all_tracks.tag_tracks.get_mut(int_tag_id as usize).unwrap().insert( int_track_id );
-        }
+        atb.all_tracks.tag_tracks.get_mut(int_tag_id as usize).unwrap().insert( int_track_id );
     }
 }
 
