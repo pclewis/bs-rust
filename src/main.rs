@@ -13,6 +13,7 @@ use std::fs::File;
 use std::path::Path;
 use std::io;
 use std::str;
+use std::collections::{HashMap,HashSet};
 use term::Terminal;
 mod bitset;
 use self::bitset::{Bitset,RedisBitset,JudyBitset};
@@ -28,6 +29,104 @@ struct Track
     track_id: String,
     title: String
 }
+
+#[derive(RustcDecodable)]
+#[derive(RustcEncodable)]
+struct AllTracks
+{
+    track_ids: Vec<String>,
+    tag_names: Vec<String>,
+    track_tags: Vec<HashSet<u64>>,
+    tag_tracks: Vec<HashSet<u64>>
+}
+
+struct AllTrackBuilder
+{
+    track_ids: HashMap<String, u64>,
+    next_track_int: u64,
+    tag_names: HashMap<String, u64>,
+    next_tag_int: u64,
+    all_tracks: AllTracks
+}
+
+fn get_or_incr2( id_map: &mut HashMap<String, u64>, id: &str, next_int: &mut u64) -> u64
+{
+    match id_map.get(id) {
+        Some(&v) => return v,
+        None => {
+            let v = *next_int;
+            *next_int += 1;
+            id_map.insert(id.to_owned(), v);
+            return v;
+        }
+    }
+}
+
+fn load_track2(atb: &mut AllTrackBuilder, filename: &str)
+{
+    debug!("Reading {}", filename);
+    let mut f = File::open(filename).unwrap();
+    let mut s = String::new();
+    f.read_to_string(&mut s).ok();
+    let decode = json::decode(&s);
+    if decode.is_err() {
+        println!("Error parsing {}", filename);
+        return;
+    }
+    let track: Track = decode.unwrap();
+
+    let int_track_id = get_or_incr2(&mut atb.track_ids, &track.track_id, &mut atb.next_track_int);
+
+    if int_track_id as usize >= atb.all_tracks.track_tags.len() {
+        let mut set = HashSet::new();
+        atb.all_tracks.track_tags.push( set );
+        atb.all_tracks.track_ids.push( track.track_id.to_owned() );
+    }
+
+    debug!( "Artist: {}, title: {}", track.artist, track.title );
+    for tag in track.tags {
+        let int_tag_id = get_or_incr2(&mut atb.tag_names, &tag.0, &mut atb.next_tag_int);
+
+        atb.all_tracks.track_tags.get_mut(int_track_id as usize).unwrap().insert( int_tag_id );
+
+        if int_tag_id as usize >= atb.all_tracks.tag_tracks.len() {
+            let mut set = HashSet::new();
+            set.insert(int_track_id);
+            atb.all_tracks.tag_tracks.push( set );
+            atb.all_tracks.tag_names.push( tag.0.to_owned() );
+        } else {
+            atb.all_tracks.tag_tracks.get_mut(int_tag_id as usize).unwrap().insert( int_track_id );
+        }
+    }
+}
+
+fn transform_tracks(paths: &[&str])
+{
+    let mut f = File::create("test.json").unwrap();
+    let mut atb : AllTrackBuilder = AllTrackBuilder{
+        track_ids: HashMap::new(),
+        tag_names: HashMap::new(),
+        next_track_int: 0,
+        next_tag_int: 0,
+        all_tracks: AllTracks {
+            track_ids: Vec::new(),
+            tag_names: Vec::new(),
+            track_tags: Vec::new(),
+            tag_tracks: Vec::new(),
+        }
+    };
+    for path in paths {
+        debug!("Reading {}", path);
+        walk_dir( Path::new(&path),
+            &mut |f| load_track2(&mut atb, f.to_str().unwrap())
+                    ).ok().expect("Error reading path");
+    }
+
+    let data = json::encode(&atb.all_tracks).unwrap();
+    f.write( data.as_bytes() );
+
+}
+
 
 fn redis_connection() -> RedisResult<Connection>
 {
@@ -193,6 +292,7 @@ fn usage(program_name: &str)
     println!("\t{} <command> <args>", program_name);
     println!("");
     println!("Commands:");
+    println!("\t{:20} {}", "transform PATH...", "do stuff");
     println!("\t{:20} {}", "import PATH...", "import tracks");
     println!("\t{:20} {}", "tags [N]", "list N biggest tags (if omitted, list all)");
     println!("\t{:20} {}", "bench1 N", "union all tags from top N tracks, get all tracks with those tags, then intersect the tags");
@@ -207,6 +307,11 @@ fn main()
     let prog_name = args.next().unwrap();
     let mut bs = RedisBitset::new(&conn);
     match args.next().unwrap_or("".into()).as_ref() {
+        "transform" => {
+            let paths : Vec<String> = args.collect();
+            let prefs : Vec<&str> = paths.iter().map(|s|s.as_ref()).collect();
+            transform_tracks(&prefs);
+        }
         "import" => {
             for arg in args {
                 debug!("Reading {}", arg);
