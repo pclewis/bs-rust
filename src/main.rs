@@ -124,10 +124,18 @@ fn transform_tracks(paths: &[&str])
     }
 
     let data = json::encode(&atb.all_tracks).unwrap();
-    f.write( data.as_bytes() );
+    f.write( data.as_bytes() ).unwrap();
 
 }
 
+fn load_all_tracks(filename: &str) -> AllTracks
+{
+    debug!("Reading all tracks from {}", filename);
+    let mut f = File::open(filename).unwrap();
+    let mut s = String::new();
+    f.read_to_string(&mut s).ok();
+    return json::decode(&s).unwrap();
+}
 
 fn redis_connection() -> RedisResult<Connection>
 {
@@ -152,7 +160,12 @@ fn load_track<T>(conn: &Connection, bs: &mut Bitset<T>, filename: &str)
     let mut f = File::open(filename).unwrap();
     let mut s = String::new();
     f.read_to_string(&mut s).ok();
-    let track: Track = json::decode(&s).unwrap();
+    let decode = json::decode(&s);
+    if decode.is_err() {
+        println!("Error parsing {}", filename);
+        return;
+    }
+    let track : Track = decode.unwrap();
     let int_track_id = get_or_incr(&conn, &track.track_id, "last_track_id");
     debug!( "Artist: {}, title: {}", track.artist, track.title );
     for tag in track.tags {
@@ -243,42 +256,37 @@ fn bench1(conn: &Connection, n: usize)
     }
 }
 
-fn bench2(conn: &Connection, n: usize)
+fn bench2(all_tracks: &AllTracks, n: usize)
 {
-    println!("Sorting tracks by size..");
-    let tracks : Vec<String> = redis::cmd("KEYS").arg("track-tags-*").query(conn).unwrap();
-    let mut tracks_counts : Vec<(&str, usize)> = time!( "fetch", tracks.iter().map( |t| { let c:usize = conn.scard(&t as &str).unwrap(); (t as &str, c) } ).collect() );
-    time!( "sort", tracks_counts.sort_by(|a,b| b.1.cmp(&a.1)) ); // sort descending
-    let top_n : Vec<&str> = tracks_counts.iter().take(n).map(|f| f.0).collect();
-    let top_n_keys : Vec<usize> = top_n.iter().map( |t| t.split("-").nth(2).unwrap().parse().unwrap() ).collect();
-    println!("Copying {} sets to judy", top_n.len());
+    println!("Importing sets to judy");
     let mut judy = JudyBitset::new();
-    // for track in top_n doesn't work because we use top_n later. TODO: understand why
-    for &track in top_n.iter() {
-        let track_num : usize = track.split("-").nth(2).unwrap().parse().unwrap();
-        let members : Vec<usize> = conn.smembers(track).unwrap();
-        judy.add( "track-tags", track_num, &members ).unwrap();
-    }
 
-    let tags : Vec<usize> = time!( "union track-tags", judy.union("track-tags", &top_n_keys).unwrap() );
+    time!( "Import track-tags",
+        for (i, tags) in all_tracks.track_tags.iter().enumerate() {
+            let tags_as_usize : Vec<usize> = tags.iter().map(|i|*i as usize).collect();
+            judy.add( "track-tags", i, &tags_as_usize ).unwrap();
+        }
+    );
+
+    time!( "Import tag-tracks",
+        for (i, tracks) in all_tracks.tag_tracks.iter().enumerate() {
+            let tracks_as_usize : Vec<usize> = tracks.iter().map(|i|*i as usize).collect();
+            judy.add( "tag-tracks", i, &tracks_as_usize ).unwrap();
+        }
+    );
+
+    println!("Sort tracks by size");
+
+    // (track_int, length)
+    let mut tracks_counts : Vec<(usize, usize)> = all_tracks.track_tags.iter().map(|tt| tt.len()).enumerate().collect();
+    time!( "sort", tracks_counts.sort_by(|a,b| b.1.cmp(&a.1)) ); // sort descending
+    let top_n : Vec<usize> = tracks_counts.iter().take(n).map(|f| f.0).collect();
+
+    let tags : Vec<usize> = time!( "union track-tags", judy.union("track-tags", &top_n).unwrap() );
     println!("Got {} tags", tags.len() );
-    let tag_names : Vec<String> = tags.iter().map( |t| format!("tag-tracks-{}", t) ).collect();
-
-    println!("Copying {} sets to judy", tags.len() );
-    for (tag, &num) in tag_names.iter().zip(&tags) {
-        let members : Vec<usize> = conn.smembers(tag as &str).unwrap();
-        judy.add("tag-tracks", num, &members).unwrap();
-    }
 
     let tracks : Vec<usize> = time!( "union tag-tracks", judy.union("tag-tracks", &tags).unwrap() );
     println!("Got {} tracks", tracks.len() );
-    let track_names : Vec<String> = tracks.iter().map( |t| format!("track-tags-{}", t) ).collect();
-
-    println!("Copying {} sets to judy", tracks.len() );
-    for (track, &num) in track_names.iter().zip(&tracks) {
-        let members : Vec<usize> = conn.smembers(track as &str).unwrap();
-        judy.add("track-tags", num, &members).unwrap();
-    }
 
     let final_tags : Vec<usize> = time!( "inter track-tags", judy.intersect("track-tags", &tracks).unwrap() );
     println!("Final tags:");
@@ -286,6 +294,7 @@ fn bench2(conn: &Connection, n: usize)
         println!("{}", tag);
     }
 }
+
 
 fn usage(program_name: &str)
 {
@@ -332,7 +341,8 @@ fn main()
         }
         "bench2" => {
             let n = args.next().and_then(|v|v.parse().ok()).unwrap();
-            bench2(&conn, n);
+            let at = load_all_tracks("test.json");
+            bench2(&at, n);
         }
         _ => usage(&prog_name)
     }
