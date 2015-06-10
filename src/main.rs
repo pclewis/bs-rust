@@ -13,6 +13,7 @@ use std::fs::File;
 use std::path::Path;
 use std::io;
 use std::str;
+use std::collections::{HashMap,HashSet};
 use term::Terminal;
 mod bitset;
 use self::bitset::{Bitset,RedisBitset,JudyBitset};
@@ -27,6 +28,113 @@ struct Track
     tags: Vec<(String, u8)>,
     track_id: String,
     title: String
+}
+
+#[derive(RustcDecodable)]
+#[derive(RustcEncodable)]
+struct AllTracks
+{
+    track_ids: Vec<String>,
+    tag_names: Vec<String>,
+    track_tags: Vec<HashSet<u64>>,
+    tag_tracks: Vec<HashSet<u64>>
+}
+
+struct AllTrackBuilder
+{
+    track_ids: HashMap<String, u64>,
+    next_track_int: u64,
+    tag_names: HashMap<String, u64>,
+    next_tag_int: u64,
+    all_tracks: AllTracks
+}
+
+fn get_or_incr2( id_map: &mut HashMap<String, u64>,
+    set_list: &mut Vec<HashSet<u64>>,
+    id_list: &mut Vec<String>,
+    id: &str,
+    next_int: &mut u64) -> u64
+{
+    match id_map.get(id) {
+        Some(&v) => return v,
+        None => {
+            let v = *next_int;
+            *next_int += 1;
+            id_map.insert(id.to_owned(), v);
+            let set = HashSet::new();
+            set_list.push(set);
+            id_list.push( id.to_owned() );
+            return v;
+        }
+    }
+}
+
+fn load_track2(atb: &mut AllTrackBuilder, filename: &str)
+{
+    debug!("Reading {}", filename);
+    let mut f = File::open(filename).unwrap();
+    let mut s = String::new();
+    f.read_to_string(&mut s).ok();
+    let decode = json::decode(&s);
+    if decode.is_err() {
+        println!("Error parsing {}", filename);
+        return;
+    }
+    let track: Track = decode.unwrap();
+
+    let int_track_id = get_or_incr2(&mut atb.track_ids,
+        &mut atb.all_tracks.track_tags,
+        &mut atb.all_tracks.track_ids,
+        &track.track_id,
+        &mut atb.next_track_int);
+
+    debug!( "Artist: {}, title: {}", track.artist, track.title );
+    for tag in track.tags {
+        let int_tag_id = get_or_incr2(&mut atb.tag_names,
+            &mut atb.all_tracks.tag_tracks,
+            &mut atb.all_tracks.tag_names,
+            &tag.0,
+            &mut atb.next_tag_int);
+
+        atb.all_tracks.track_tags.get_mut(int_track_id as usize).unwrap().insert( int_tag_id );
+        atb.all_tracks.tag_tracks.get_mut(int_tag_id as usize).unwrap().insert( int_track_id );
+    }
+}
+
+fn transform_tracks(paths: &[&str])
+{
+    let mut f = File::create("test.json").unwrap();
+    let mut atb : AllTrackBuilder = AllTrackBuilder{
+        track_ids: HashMap::new(),
+        tag_names: HashMap::new(),
+        next_track_int: 0,
+        next_tag_int: 0,
+        all_tracks: AllTracks {
+            track_ids: Vec::new(),
+            tag_names: Vec::new(),
+            track_tags: Vec::new(),
+            tag_tracks: Vec::new(),
+        }
+    };
+    for path in paths {
+        debug!("Reading {}", path);
+        walk_dir( Path::new(&path),
+            &mut |f| load_track2(&mut atb, f.to_str().unwrap())
+                    ).ok().expect("Error reading path");
+    }
+
+    let data = json::encode(&atb.all_tracks).unwrap();
+    f.write( data.as_bytes() ).unwrap();
+
+}
+
+fn load_all_tracks(filename: &str) -> AllTracks
+{
+    debug!("Reading all tracks from {}", filename);
+    let mut f = File::open(filename).unwrap();
+    let mut s = String::new();
+    f.read_to_string(&mut s).ok();
+    return json::decode(&s).unwrap();
 }
 
 fn redis_connection() -> RedisResult<Connection>
@@ -52,7 +160,12 @@ fn load_track<T>(conn: &Connection, bs: &mut Bitset<T>, filename: &str)
     let mut f = File::open(filename).unwrap();
     let mut s = String::new();
     f.read_to_string(&mut s).ok();
-    let track: Track = json::decode(&s).unwrap();
+    let decode = json::decode(&s);
+    if decode.is_err() {
+        println!("Error parsing {}", filename);
+        return;
+    }
+    let track : Track = decode.unwrap();
     let int_track_id = get_or_incr(&conn, &track.track_id, "last_track_id");
     debug!( "Artist: {}, title: {}", track.artist, track.title );
     for tag in track.tags {
@@ -143,42 +256,37 @@ fn bench1(conn: &Connection, n: usize)
     }
 }
 
-fn bench2(conn: &Connection, n: usize)
+fn bench2(all_tracks: &AllTracks, n: usize)
 {
-    println!("Sorting tracks by size..");
-    let tracks : Vec<String> = redis::cmd("KEYS").arg("track-tags-*").query(conn).unwrap();
-    let mut tracks_counts : Vec<(&str, usize)> = time!( "fetch", tracks.iter().map( |t| { let c:usize = conn.scard(&t as &str).unwrap(); (t as &str, c) } ).collect() );
-    time!( "sort", tracks_counts.sort_by(|a,b| b.1.cmp(&a.1)) ); // sort descending
-    let top_n : Vec<&str> = tracks_counts.iter().take(n).map(|f| f.0).collect();
-    let top_n_keys : Vec<usize> = top_n.iter().map( |t| t.split("-").nth(2).unwrap().parse().unwrap() ).collect();
-    println!("Copying {} sets to judy", top_n.len());
+    println!("Importing sets to judy");
     let mut judy = JudyBitset::new();
-    // for track in top_n doesn't work because we use top_n later. TODO: understand why
-    for &track in top_n.iter() {
-        let track_num : usize = track.split("-").nth(2).unwrap().parse().unwrap();
-        let members : Vec<usize> = conn.smembers(track).unwrap();
-        judy.add( "track-tags", track_num, &members ).unwrap();
-    }
 
-    let tags : Vec<usize> = time!( "union track-tags", judy.union("track-tags", &top_n_keys).unwrap() );
+    time!( "Import track-tags",
+        for (i, tags) in all_tracks.track_tags.iter().enumerate() {
+            let tags_as_usize : Vec<usize> = tags.iter().map(|i|*i as usize).collect();
+            judy.add( "track-tags", i, &tags_as_usize ).unwrap();
+        }
+    );
+
+    time!( "Import tag-tracks",
+        for (i, tracks) in all_tracks.tag_tracks.iter().enumerate() {
+            let tracks_as_usize : Vec<usize> = tracks.iter().map(|i|*i as usize).collect();
+            judy.add( "tag-tracks", i, &tracks_as_usize ).unwrap();
+        }
+    );
+
+    println!("Sort tracks by size");
+
+    // (track_int, length)
+    let mut tracks_counts : Vec<(usize, usize)> = all_tracks.track_tags.iter().map(|tt| tt.len()).enumerate().collect();
+    time!( "sort", tracks_counts.sort_by(|a,b| b.1.cmp(&a.1)) ); // sort descending
+    let top_n : Vec<usize> = tracks_counts.iter().take(n).map(|f| f.0).collect();
+
+    let tags : Vec<usize> = time!( "union track-tags", judy.union("track-tags", &top_n).unwrap() );
     println!("Got {} tags", tags.len() );
-    let tag_names : Vec<String> = tags.iter().map( |t| format!("tag-tracks-{}", t) ).collect();
-
-    println!("Copying {} sets to judy", tags.len() );
-    for (tag, &num) in tag_names.iter().zip(&tags) {
-        let members : Vec<usize> = conn.smembers(tag as &str).unwrap();
-        judy.add("tag-tracks", num, &members).unwrap();
-    }
 
     let tracks : Vec<usize> = time!( "union tag-tracks", judy.union("tag-tracks", &tags).unwrap() );
     println!("Got {} tracks", tracks.len() );
-    let track_names : Vec<String> = tracks.iter().map( |t| format!("track-tags-{}", t) ).collect();
-
-    println!("Copying {} sets to judy", tracks.len() );
-    for (track, &num) in track_names.iter().zip(&tracks) {
-        let members : Vec<usize> = conn.smembers(track as &str).unwrap();
-        judy.add("track-tags", num, &members).unwrap();
-    }
 
     let final_tags : Vec<usize> = time!( "inter track-tags", judy.intersect("track-tags", &tracks).unwrap() );
     println!("Final tags:");
@@ -187,12 +295,14 @@ fn bench2(conn: &Connection, n: usize)
     }
 }
 
+
 fn usage(program_name: &str)
 {
     println!("Usage:");
     println!("\t{} <command> <args>", program_name);
     println!("");
     println!("Commands:");
+    println!("\t{:20} {}", "transform PATH...", "do stuff");
     println!("\t{:20} {}", "import PATH...", "import tracks");
     println!("\t{:20} {}", "tags [N]", "list N biggest tags (if omitted, list all)");
     println!("\t{:20} {}", "bench1 N", "union all tags from top N tracks, get all tracks with those tags, then intersect the tags");
@@ -207,6 +317,11 @@ fn main()
     let prog_name = args.next().unwrap();
     let mut bs = RedisBitset::new(&conn);
     match args.next().unwrap_or("".into()).as_ref() {
+        "transform" => {
+            let paths : Vec<String> = args.collect();
+            let prefs : Vec<&str> = paths.iter().map(|s|s.as_ref()).collect();
+            transform_tracks(&prefs);
+        }
         "import" => {
             for arg in args {
                 debug!("Reading {}", arg);
@@ -226,7 +341,8 @@ fn main()
         }
         "bench2" => {
             let n = args.next().and_then(|v|v.parse().ok()).unwrap();
-            bench2(&conn, n);
+            let at = load_all_tracks("test.json");
+            bench2(&at, n);
         }
         _ => usage(&prog_name)
     }
